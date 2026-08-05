@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stimulus-aligner"
+version = "0.1.0"
+description = "Decode photodiode pulse markers and align a played stimulus protocol onto a recording's frame-exact timeline."
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+mat = ["scipy"]
+dev = ["pytest", "matplotlib", "scipy"]
+
+[tool.setuptools.packages.find]
+include = ["aligner*"]

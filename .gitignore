@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+
+# Tooling
+.idea/
+.vscode/
+.pytest_cache/
+.coverage
+
+# OS
+.DS_Store
+
+# Real recordings never belong in the repo — the demo is synthetic
+*.mat
