@@ -21,14 +21,26 @@ acquisition lag between "the browser drew the frame" and "the photodiode saw it.
 recording itself is the ground truth: the photodiode marker is when the stimulus *actually*
 appeared, and the frame clock says which imaging frame that was.
 
-Recovering it has one real subtlety. A photodiode marker is not a clean step — each logical
-pulse is a short burst of ~120 Hz monitor flicker spanning ~0.3–1.4 V, so one pulse crosses
-any fixed threshold many times. Counting raw crossings over-counts (a 3-pulse "moving" marker
-would read as many more). The decoder instead groups the supra-threshold run onsets into
-*pulses* by their onset-to-onset spacing, keyed on the stable inter-pulse period rather than
-the width-dependent end-to-start gap — so the count stays right even when a block is
-acquisition-lagged. A grating adds only low-amplitude flicker (< ~0.1 V) that never reaches
-the marker threshold, so it is ignored.
+Recovering it has real subtleties, each handled explicitly:
+
+- **Flicker.** A photodiode marker is not a clean step — each logical pulse is a short burst
+  of ~120 Hz monitor flicker, so one pulse crosses any threshold many times. The decoder maps
+  every supra-threshold run onto the **known, fixed pulse period** (each run contributes the
+  period slots it spans) and counts the distinct slots, so a pulse's own flicker collapses to
+  one slot.
+- **Acquisition lag.** Because the count keys on the stable period (not a width-dependent
+  gap), a per-block timing lag doesn't change it.
+- **Merged pulses.** If the photodiode never dips between two pulses (monitor persistence),
+  they form one run with no interior edge — so the count is recovered from the run's
+  *duration* (how many period slots it spans), not just its onsets.
+- **Threshold.** It is derived from the signal — a low percentile for the baseline, a high
+  percentile for the marker level, with the cut a fraction of the span up — so it scales with
+  photodiode gain and clears the low-amplitude grating flicker, rather than assuming a fixed
+  voltage.
+
+One assumption remains, by necessity: the true pulse width must be under ~half the period.
+At width ≈ period, a single wide flash is genuinely indistinguishable from two pulses by
+threshold crossings alone.
 
 ## Use
 
@@ -41,9 +53,10 @@ events = decode_recording(frame_chan, pulse_chan, sr)
 #   -> [{type, n_pulses, onset_s, onset_frame}, ...]  (grey/still/moving, in time order)
 
 protocol = json.load(open("protocol_played.json"))     # written by the runner
-result = align_to_protocol(events, protocol, tolerance_s=0.05)
-result["ok"]                 # every block matched, every type agreed, within tolerance
+result = align_to_protocol(events, protocol)           # tolerance_s / spread_s have real defaults
+result["ok"]                 # every block matched, every type agreed, offset small AND constant
 result["median_offset_s"]    # intended-vs-true timing offset
+result["offset_spread_s"]    # how constant the offset is (a real alignment is nearly flat)
 result["aligned"]            # per block: decoded onset_frame + label + orientation_deg
 ```
 
@@ -74,9 +87,13 @@ pytest
 
 ## Verification
 
-Fully tested headless on synthetic recordings (`pytest`) — including that a mis-generated
-4-pulse marker surfaces as `?4` instead of being silently dropped. On real recordings the
-photodiode is the timing ground truth by design.
+Fully tested headless on synthetic recordings (`pytest`, 15 checks). The suite covers the
+hard cases, not just the clean one: merged pulses (persistence), acquisition lag, a weak
+marker (auto-threshold), a bright block sitting in the baseline window, a NaN dropped sample
+in the frame channel, a frame clock high at sample 0 (exact frame index, no off-by-one), and
+the alignment gate rejecting a plausible-but-wrong positional match. A mis-generated pulse
+count surfaces as `?N` rather than being silently dropped. On real recordings the photodiode
+is the timing ground truth by design.
 
 ## License
 
