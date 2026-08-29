@@ -1,5 +1,7 @@
 # stimulus-aligner
 
+[![tests](https://github.com/LynnYuSmith/stimulus-aligner/actions/workflows/tests.yml/badge.svg)](https://github.com/LynnYuSmith/stimulus-aligner/actions/workflows/tests.yml)
+
 Decode a recording's photodiode **pulse markers** and align a played stimulus protocol onto
 its **frame-exact** timeline.
 

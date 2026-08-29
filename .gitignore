@@ -22,3 +22,7 @@ venv/
 
 # Real recordings never belong in the repo — the demo is synthetic
 *.mat
+
+# local run artefacts
+debug.log
+__pycache__/
