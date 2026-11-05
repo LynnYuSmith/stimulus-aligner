@@ -14,7 +14,7 @@ photodiode onset mapped through the frame clock) — then aligns that onto the p
 runner wrote, attaching each block's label and orientation and reporting the intended-vs-true
 timing offset.
 
-![decode the markers, recover the true onsets, align the played protocol](figures/before_after.png)
+![A: every marker in a synthetic recording decoded; B: one block up close, the intended onset 16 ms before the true one on the frame clock; C: that offset for every block](figures/before_after.png)
 
 ## The idea
 
@@ -84,8 +84,9 @@ pytest
   flicker markers, grating flicker to ignore, and a per-block acquisition lag). Ground truth
   known.
 - `examples/demo.py` — decode + align the synthetic recording → `figures/before_after.png`.
-- `tests/test_aligner.py` — `pytest` (7 checks): pulse counts, ignored grating flicker,
-  frame mapping, full alignment, and that an unknown pulse count surfaces rather than vanishes.
+- `tests/test_aligner.py` — `pytest` (15 checks): pulse counts, ignored grating flicker,
+  frame mapping, full alignment, and that an unknown pulse count surfaces rather than vanishes;
+  the hard cases are listed under Verification.
 
 ## Verification
 
