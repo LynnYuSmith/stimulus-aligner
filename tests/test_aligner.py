@@ -37,7 +37,7 @@ def test_pulse_counts_match_block_types():
     _fc, pc, sr, proto, truth = make_recording(seed=0)
     bursts = detect_pulse_bursts(pc, sr)
     got = [n for _o, n in bursts]
-    want = [{"grey": 1, "still": 2, "moving": 3}[t[0]] for t in truth]
+    want = [{"grey": 1, "still": 2, "moving": 3, "contrast": 4}[t[0]] for t in truth]
     assert got == want            # every marker decoded to the right pulse count
 
 
@@ -164,17 +164,76 @@ def test_align_recovers_protocol():
     assert movings[1]["label"] == "Moving 45°"
 
 
-def test_unknown_pulse_count_is_visible_not_dropped():
-    # four pulses (a mis-generated marker) should surface as "?4", not vanish
+def _marker_recording(n_pulses, sr=1000.0):
+    """A 3 s frame clock + photodiode with one clean ``n_pulses`` marker at 0.5 s."""
     from make_sample import PULSE_PERIOD_S
-    sr = 1000.0
     n = int(3.0 * sr)
     pc = np.full(n, 0.1)
-    for k in range(4):
+    for k in range(n_pulses):
         s = int((0.5 + k * PULSE_PERIOD_S) * sr)
         pc[s:s + int(0.03 * sr)] = 1.3
     fc = np.zeros(n)
     for fo in np.arange(0, 3.0, 1 / 30.0):
         fc[int(fo * sr):int(fo * sr) + 4] = 1.0
+    return fc, pc, sr
+
+
+def test_unknown_pulse_count_is_visible_not_dropped():
+    # five pulses (a mis-generated marker) should surface as "?5", not vanish
+    fc, pc, sr = _marker_recording(5)
     events = decode_recording(fc, pc, sr)
-    assert len(events) == 1 and events[0]["type"] == "?4"
+    assert len(events) == 1 and events[0]["type"] == "?5"
+
+
+# ---- back-to-back pairs (stimulus-runner v1.2: the second grating pulses 4 times) ----
+
+def test_four_pulse_marker_decodes_as_contrast_half():
+    fc, pc, sr = _marker_recording(4)
+    events = decode_recording(fc, pc, sr)
+    assert len(events) == 1
+    assert events[0]["type"] == "contrast" and events[0]["n_pulses"] == 4
+
+
+PAIR_BLOCKS = [("black", 3.0, None), ("grey", 2.0, None),
+               ("moving", 2.0, 0), ("moving", 2.0, 180), ("grey", 2.0, None),   # moving pair
+               ("still", 2.0, 90), ("still", 2.0, 270), ("grey", 2.0, None),    # still pair
+               ("moving", 2.0, 45), ("grey", 2.0, None), ("black", 3.0, None)]
+
+
+def test_sample_marks_second_grating_of_a_pair_with_four_pulses():
+    _fc, _pc, _sr, proto, truth = make_recording(blocks=PAIR_BLOCKS, seed=2)
+    assert [b["marker_pulses"] for b in proto["sequence"]] == [0, 1, 3, 4, 1, 2, 4, 1, 3, 1, 0]
+    assert [t[0] for t in truth] == ["grey", "moving", "contrast", "grey", "still",
+                                     "contrast", "grey", "moving", "grey"]
+
+
+def test_align_recovers_protocol_with_contrast_pairs():
+    fc, pc, sr, proto, truth = make_recording(blocks=PAIR_BLOCKS, seed=2, lag_ms=25.0)
+    events = decode_recording(fc, pc, sr)
+    assert [e["type"] for e in events] == [t[0] for t in truth]
+    res = align_to_protocol(events, proto, tolerance_s=0.05)
+    assert res["ok"] and res["type_agreement"] == 1.0
+    halves = [a for a in res["aligned"] if a["type"] == "contrast"]
+    assert [(a["protocol_type"], a["orientation_deg"]) for a in halves] == [("moving", 180),
+                                                                           ("still", 270)]
+
+
+def test_contrast_half_aligns_when_protocol_recorded_three_pulses():
+    # runner sessions recorded before marker_pulses was corrected say 3 for the contrast half;
+    # the block's type is the authority, so the alignment must still pass
+    _fc, _pc, _sr, proto, _t = make_recording(blocks=PAIR_BLOCKS, seed=2)
+    fc, pc, sr, _p, _t2 = make_recording(blocks=PAIR_BLOCKS, seed=2, lag_ms=25.0)
+    for b in proto["sequence"]:
+        if b["marker_pulses"] == 4:
+            b["marker_pulses"] = {"moving": 3, "still": 2}[b["type"]]
+    assert align_to_protocol(decode_recording(fc, pc, sr), proto, tolerance_s=0.05)["ok"]
+
+
+def test_plain_grating_where_protocol_says_contrast_half_fails():
+    # the protocol says this block pulsed 4 times; a decoded plain "moving" there is a mismatch
+    proto = {"sequence": [{"type": "moving", "label": "Moving 180°", "orientation_deg": 180,
+                           "start_time_s": 0.0, "marker_pulses": 4}]}
+    ev = [{"type": "moving", "n_pulses": 3, "onset_s": 0.01, "onset_frame": 0}]
+    assert align_to_protocol(ev, proto)["ok"] is False
+    ev[0]["type"] = "contrast"
+    assert align_to_protocol(ev, proto)["ok"] is True

@@ -4,7 +4,11 @@ from __future__ import annotations
 import numpy as np
 
 # Pulse count -> block type. A black rest screen carries no marker (0 pulses).
-PULSE_TO_TYPE = {1: "grey", 2: "still", 3: "moving"}
+# 4 = "contrast": the second half of a back-to-back pair, i.e. any grating (moving or still)
+# shown straight after another grating with no grey between (stimulus-runner v1.2+). The
+# protocol still records that block as "moving"/"still"; align_to_protocol accepts a decoded
+# "contrast" against either. Any other count (5, ...) decodes as "?N" so it stays visible.
+PULSE_TO_TYPE = {1: "grey", 2: "still", 3: "moving", 4: "contrast"}
 TYPE_TO_PULSE = {v: k for k, v in PULSE_TO_TYPE.items()}
 
 # Marker-pulse timing (must match the runner's generator): pulses sit at a fixed period of
@@ -24,8 +28,9 @@ def detect_frame_clock(frame_chan, sr, *, hi_thresh=None):
 
     If the channel is already HIGH at sample 0 (a recording trimmed to start on a frame),
     that first frame is a rising edge too and is emitted at t=0 — otherwise every frame
-    index would shift by one. NaN samples are treated as low (a dropped sample mid-pulse
-    must not split one frame into two edges).
+    index would shift by one. NaN samples are forward-filled (a dropped sample takes the
+    previous sample's value), so a dropped sample mid-pulse cannot split one frame into two
+    edges. A leading NaN, with no previous sample, takes the first sample's value.
     """
     f = np.asarray(frame_chan, dtype=float)
     if hi_thresh is None:
@@ -58,7 +63,7 @@ def detect_pulse_bursts(pulse_chan, sr, t0=0.0, t1=None, *, base_window_s=2.0,
                         pulse_period_s=PULSE_PERIOD_S, base_pct=10.0, span_frac=0.35):
     """Count marker pulses within ``[t0, t1]`` s, grouped into per-block bursts.
 
-    Returns ``[(onset_s, n_pulses), ...]`` where ``n_pulses`` in {1, 2, 3} is the block type
+    Returns ``[(onset_s, n_pulses), ...]`` where ``n_pulses`` in {1, 2, 3, 4} is the block type
     per :data:`PULSE_TO_TYPE`, and ``onset_s`` is the first pulse's onset (s, absolute).
 
     A photodiode marker is not a clean step: each logical pulse is a short burst of ~120 Hz
@@ -66,10 +71,13 @@ def detect_pulse_bursts(pulse_chan, sr, t0=0.0, t1=None, *, base_window_s=2.0,
     Counting raw threshold crossings over-counts, and a bare onset-to-onset gap threshold
     both *merges* two pulses (if the signal never dips between them — monitor persistence) and
     *splits* one wide pulse (if its own flicker outlasts the gap). Instead each supra-threshold
-    run onset is assigned to a marker pulse by the KNOWN, fixed inter-pulse period:
-    ``index = round((onset − first_onset) / pulse_period_s)``. The pulse count is the number of
-    DISTINCT indices, which is robust to both merges and wide flashes (and to acquisition lag,
-    since it keys on the stable period, not a width-dependent gap).
+    run is assigned to marker-pulse slots by the KNOWN, fixed inter-pulse period: a run from
+    ``s`` to ``e`` covers the slots ``floor(x + 0.1)`` for ``x = (s − first_onset) / period``
+    up to the same for ``e``. The pulse's own trailing flicker (up to ~half a period after its
+    start) therefore floors back to its slot, while the 0.1 margin absorbs float error at the
+    slot boundary. The pulse count is the number of DISTINCT slots, which is robust to both
+    merges and wide flashes (and to acquisition lag, since it keys on the stable period, not a
+    width-dependent gap).
 
     The threshold is derived from the signal, not hard-coded: ``base`` is a low percentile
     (``base_pct``) of the whole segment (robust to a bright block sitting in a fixed leading
@@ -128,18 +136,15 @@ def detect_pulse_bursts(pulse_chan, sr, t0=0.0, t1=None, *, base_window_s=2.0,
     bursts_runs.append(cur)
 
     # count the DISTINCT pulse slots each burst covers, on the KNOWN fixed period: every run
-    # contributes the period indices it spans, from round(start/period) to round(end/period).
-    # A single pulse's flicker sub-runs all round to one slot; a merged multi-pulse run spans
-    # several slots; a wide flash likewise — all robust to acquisition lag (no width-dependent
-    # gap threshold). Assumes the true pulse width < ~half the period (else width≈period is
-    # fundamentally indistinguishable from two pulses by threshold crossings alone).
+    # contributes the slots it spans, from its start slot to its END slot. A single pulse's
+    # flicker sub-runs all land in one slot; a merged multi-pulse run spans several slots; a
+    # wide flash likewise — all robust to acquisition lag (no width-dependent gap threshold).
     # A pulse's start sits at k·period and its trailing flicker reaches ~k·period + width,
-    # with width ≈ half the period. So a sub-run's time in period units lies in [k, k+~0.5].
-    # Assign it to slot ``floor(x + MARGIN)``: MARGIN (period units) must exceed float error
-    # at the integer boundary yet stay below 0.5 so the trailing flicker still floors to k.
-    # A merged (bridged) run spans several slots; taking the range from its start slot to its
-    # END slot counts them. Assumes the true pulse width < ~half the period (width≈period is
-    # fundamentally indistinguishable from two pulses by threshold crossings alone).
+    # with width ≈ half the period, so a sub-run's time in period units lies in [k, k+~0.5].
+    # It is assigned to slot ``floor(x + MARGIN)``: MARGIN (period units) must exceed float
+    # error at the integer boundary yet stay below 0.5 so the trailing flicker still floors
+    # to k. Assumes the true pulse width < ~half the period (width≈period is fundamentally
+    # indistinguishable from two pulses by threshold crossings alone).
     MARGIN = 0.1
     bursts = []
     for burst in bursts_runs:
@@ -157,8 +162,8 @@ def decode_recording(frame_chan, pulse_chan, sr, **kwargs):
     """Decode a whole recording into frame-exact marker events.
 
     Returns ``[{type, n_pulses, onset_s, onset_frame}, ...]`` in time order, one per marker
-    burst (grey/still/moving). Black rest screens carry no marker and do not appear.
-    Unknown pulse counts (e.g. 4+) are typed ``"?<n>"`` rather than dropped, so a mis-decode
+    burst (grey/still/moving/contrast). Black rest screens carry no marker and do not appear.
+    Unknown pulse counts (e.g. 5+) are typed ``"?<n>"`` rather than dropped, so a mis-decode
     is visible instead of silent.
     """
     frame_onsets = detect_frame_clock(frame_chan, sr)

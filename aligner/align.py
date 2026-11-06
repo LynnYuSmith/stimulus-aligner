@@ -10,13 +10,32 @@ def _marker_blocks(protocol):
     return [b for b in seq if b.get("type") in ("grey", "still", "moving")]
 
 
+def _types_agree(ev, block):
+    """Does a decoded event's type fit the protocol block it is paired with?
+
+    A decoded ``"contrast"`` (4 pulses: the second grating of a back-to-back pair) fits a
+    ``"moving"`` or ``"still"`` block — the protocol keeps the grating's own type. If the
+    block records ``marker_pulses == 4`` it IS a contrast half, so only ``"contrast"`` fits.
+    A block that records 3/2 for such a grating (runner sessions before that field was
+    corrected) still accepts ``"contrast"``: the type field is the authority there.
+    """
+    ev_type, bl_type = ev.get("type"), block.get("type")
+    if block.get("marker_pulses") == 4:
+        return ev_type == "contrast" and bl_type in ("moving", "still")
+    if ev_type == "contrast":
+        return bl_type in ("moving", "still")
+    return ev_type == bl_type
+
+
 def align_to_protocol(events, protocol, *, tolerance_s=0.5, spread_s=0.25):
     """Match decoded events to the played protocol, in order, and attach its labels.
 
     ``events`` is the output of :func:`decode_recording`; ``protocol`` is the runner's
     ``protocol_played.json`` (or its ``sequence`` list). Matching is positional over the
     marker-bearing blocks (grey/still/moving), which is unambiguous because both sequences
-    are ordered and the black rest screens carry no marker on either side.
+    are ordered and the black rest screens carry no marker on either side. A decoded
+    ``"contrast"`` event (4 pulses, the second half of a back-to-back pair) matches the
+    protocol's ``"moving"`` or ``"still"`` block it was played as.
 
     ``tolerance_s`` bounds the acceptable |decoded − intended| onset offset; the default is a
     real bound (not ``None``), so a positional mis-pairing that happens to keep types (an
@@ -27,11 +46,12 @@ def align_to_protocol(events, protocol, *, tolerance_s=0.5, spread_s=0.25):
     every offset is individually small. Set either to ``None`` to disable that check.
 
     Returns a dict:
-      * ``aligned`` — one row per matched pair with ``type``, decoded ``onset_s`` /
+      * ``aligned`` — one row per matched pair with the decoded ``type`` and the block's
+        ``protocol_type``, ``type_matches``, decoded ``onset_s`` /
         ``onset_frame``, the protocol ``label`` / ``orientation_deg`` / intended
         ``start_time_s``, and ``offset_s`` (decoded − intended).
       * ``n_events`` / ``n_blocks`` / ``n_matched``
-      * ``type_agreement`` — fraction of matched pairs whose decoded type equals the protocol's
+      * ``type_agreement`` — fraction of matched pairs whose decoded type fits the protocol's
       * ``median_offset_s`` / ``max_abs_offset_s`` / ``offset_spread_s`` over matched pairs
       * ``ok`` — True iff every block matched, every type agreed, |offset| ≤ ``tolerance_s``,
         and the offset spread ≤ ``spread_s``.
@@ -43,12 +63,13 @@ def align_to_protocol(events, protocol, *, tolerance_s=0.5, spread_s=0.25):
         ev, bl = events[i], blocks[i]
         intended = bl.get("start_time_s")
         offset = None if intended is None else ev["onset_s"] - float(intended)
-        agree = ev["type"] == bl.get("type")
+        agree = _types_agree(ev, bl)
         type_ok += int(agree)
         if offset is not None:
             offsets.append(offset)
         aligned.append({
             "type": ev["type"],
+            "protocol_type": bl.get("type"),
             "type_matches": agree,
             "onset_s": ev["onset_s"],
             "onset_frame": ev["onset_frame"],

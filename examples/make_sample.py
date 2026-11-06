@@ -1,6 +1,8 @@
 """Synthesize a recording: a frame clock + a photodiode channel with realistic pulse markers.
 
-Each block onset emits a marker of N pulses (grey=1, still=2, moving=3; black none). Each
+Each block onset emits a marker of N pulses (grey=1, still=2, moving=3; black none), and,
+as in stimulus-runner v1.2, a grating shown straight after another grating (the second half
+of a back-to-back pair, no grey between) emits 4 instead. Each
 pulse is a short burst of ~120 Hz flicker spanning ~0.3–1.4 V (so it crosses a mid threshold
 many times — the thing a naive crossing-count gets wrong). Gratings add low-amplitude flicker
 (< 0.1 V) that must be ignored. A small, random per-block acquisition lag is injected so the
@@ -12,6 +14,8 @@ match it, so a correct aligner recovers it.
 import numpy as np
 
 PULSES = {"grey": 1, "still": 2, "moving": 3, "black": 0}
+CONTRAST_PULSES = 4              # second grating of a back-to-back pair
+GRATINGS = ("moving", "still")
 PULSE_PERIOD_S = 6 / 51.0        # ~0.118 s, onset-to-onset (matches the runner)
 PULSE_FLICKER_HZ = 120.0
 PULSE_WIDTH_S = 0.030            # one pulse's flicker burst duration
@@ -21,17 +25,21 @@ FRAME_FPS = 30.0
 def _protocol(blocks):
     seq, t = [], 0.0
     oris = set()
+    prev = None
     for i, (typ, dur, ori) in enumerate(blocks):
+        contrast_half = typ in GRATINGS and prev in GRATINGS
         item = {"index": i, "type": typ,
                 "label": {"grey": "Grey", "black": "Black", "moving": f"Moving {ori}°",
                           "still": f"Static {ori}°"}[typ],
                 "orientation_deg": None if typ in ("grey", "black") else ori,
                 "start_time_s": round(t, 3), "end_time_s": round(t + dur, 3),
-                "duration_s": dur, "marker_pulses": PULSES[typ]}
+                "duration_s": dur,
+                "marker_pulses": CONTRAST_PULSES if contrast_half else PULSES[typ]}
         if typ in ("moving", "still"):
             oris.add(ori)
         seq.append(item)
         t += dur
+        prev = typ
     return {"protocol_name": "synthetic", "sequence": seq,
             "orientations_deg": sorted(oris), "total_duration_s": round(t, 3)}
 
@@ -40,8 +48,10 @@ def make_recording(blocks=None, sr=1000.0, seed=0, lag_ms=25.0):
     """Return ``(frame_chan, pulse_chan, sr, protocol, truth)``.
 
     ``blocks`` is a list of ``(type, duration_s, orientation)``; a default 8-orientation
-    sequence with grey gaps and black pads is used if omitted. ``truth`` lists the true
-    ``(type, onset_s, onset_frame)`` for every marker-bearing block.
+    sequence with grey gaps and black pads is used if omitted; two gratings in a row make a
+    back-to-back pair whose second half carries the 4-pulse marker. ``truth`` lists the true
+    ``(decoded_type, onset_s, onset_frame)`` for every marker-bearing block, where the
+    decoded type of a pair's second half is ``"contrast"``.
     """
     rng = np.random.RandomState(seed)
     if blocks is None:
@@ -68,11 +78,12 @@ def make_recording(blocks=None, sr=1000.0, seed=0, lag_ms=25.0):
     truth = []
     for b in proto["sequence"]:
         typ, onset = b["type"], b["start_time_s"]
-        npulse = PULSES[typ]
+        npulse = b["marker_pulses"]
         lag = rng.uniform(0, lag_ms / 1000.0)          # per-block acquisition lag
         if npulse > 0:
             first = onset + lag
-            truth.append((typ, first, int(first * FRAME_FPS)))
+            decoded = "contrast" if npulse == CONTRAST_PULSES else typ
+            truth.append((decoded, first, int(first * FRAME_FPS)))
             for k in range(npulse):
                 ps = first + k * PULSE_PERIOD_S
                 seg = (t >= ps) & (t < ps + PULSE_WIDTH_S)
