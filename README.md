@@ -6,13 +6,15 @@ Decode a recording's photodiode **pulse markers** and align a played stimulus pr
 its **frame-exact** timeline.
 
 The companion [stimulus-runner](https://github.com/LynnYuSmith/stimulus-runner) flashes a RED
-corner marker at each block onset, pulse-coded by count (grey = 1, still = 2, moving = 3; a
-black rest screen has none). On the rig a photodiode captures those pulses and a frame-clock
+corner marker at each block onset, pulse-coded by count (grey = 1, still = 2, moving = 3, and
+4 for the second half of a back-to-back pair — a grating shown straight after another grating
+with no grey between; a black rest screen has none). On the rig a photodiode captures those pulses and a frame-clock
 channel timestamps every imaging frame. This tool reads those two channels and recovers, for
 each marker, **which block it was** (by pulse count) and **when it truly started** (the
 photodiode onset mapped through the frame clock) — then aligns that onto the protocol the
 runner wrote, attaching each block's label and orientation and reporting the intended-vs-true
-timing offset.
+timing offset. Runner v1.2 sessions with back-to-back contrast pairs align: the 4-pulse half
+decodes as `contrast` and matches the moving or still block the protocol recorded for it.
 
 ![A: every marker in a synthetic recording decoded; B: one block up close, the intended onset 16 ms before the true one on the frame clock; C: that offset for every block](figures/before_after.png)
 
@@ -52,7 +54,7 @@ import json
 
 # frame_chan, pulse_chan: 1-D arrays from the recording; sr: sample rate (Hz)
 events = decode_recording(frame_chan, pulse_chan, sr)
-#   -> [{type, n_pulses, onset_s, onset_frame}, ...]  (grey/still/moving, in time order)
+#   -> [{type, n_pulses, onset_s, onset_frame}, ...]  (grey/still/moving/contrast, in time order)
 
 protocol = json.load(open("protocol_played.json"))     # written by the runner
 result = align_to_protocol(events, protocol)           # tolerance_s / spread_s have real defaults
@@ -62,14 +64,14 @@ result["offset_spread_s"]    # how constant the offset is (a real alignment is n
 result["aligned"]            # per block: decoded onset_frame + label + orientation_deg
 ```
 
-Reading a LabChart-style `.mat` (channels + sample rate) needs `scipy`; the core decode/align
-works on plain NumPy arrays, so nothing but NumPy is required for the logic and tests.
+The core decode/align works on plain NumPy arrays and needs nothing but NumPy. Load your
+channels and sample rate yourself (for a LabChart `.mat` export, e.g. with `scipy.io.loadmat`).
 
 ## Run the example
 
 ```bash
 python -m venv .venv && source .venv/bin/activate    # Python 3.10+
-pip install numpy && pip install pytest matplotlib   # matplotlib only for the figure
+pip install -e . && pip install pytest matplotlib    # matplotlib only for the figure
 python examples/demo.py        # writes figures/before_after.png
 pytest
 ```
@@ -81,21 +83,24 @@ pytest
 - `aligner/align.py` — `align_to_protocol`: positional match to the runner's played protocol,
   with labels, orientations, and the timing offset.
 - `examples/make_sample.py` — a synthetic recording (frame clock + photodiode with realistic
-  flicker markers, grating flicker to ignore, and a per-block acquisition lag). Ground truth
-  known.
+  flicker markers, grating flicker to ignore, and a per-block acquisition lag; two gratings in
+  a row give a back-to-back pair with the 4-pulse marker). Ground truth known.
 - `examples/demo.py` — decode + align the synthetic recording → `figures/before_after.png`.
-- `tests/test_aligner.py` — `pytest` (15 checks): pulse counts, ignored grating flicker,
-  frame mapping, full alignment, and that an unknown pulse count surfaces rather than vanishes;
+- `tests/test_aligner.py` — `pytest` (20 checks): pulse counts, ignored grating flicker,
+  frame mapping, full alignment (including back-to-back contrast pairs), and that an unknown
+  pulse count surfaces rather than vanishes;
   the hard cases are listed under Verification.
 
 ## Verification
 
-Fully tested headless on synthetic recordings (`pytest`, 15 checks). The suite covers the
+Fully tested headless on synthetic recordings (`pytest`, 20 checks). The suite covers the
 hard cases, not just the clean one: merged pulses (persistence), acquisition lag, a weak
 marker (auto-threshold), a bright block sitting in the baseline window, a NaN dropped sample
 in the frame channel, a frame clock high at sample 0 (exact frame index, no off-by-one), and
-the alignment gate rejecting a plausible-but-wrong positional match. A mis-generated pulse
-count surfaces as `?N` rather than being silently dropped. On real recordings the photodiode
+the alignment gate rejecting a plausible-but-wrong positional match, and back-to-back pairs
+(the 4-pulse contrast half aligning to its moving or still block, also when an older played
+protocol recorded 3 pulses for it). A mis-generated pulse count (5 or more) surfaces as `?N`
+rather than being silently dropped. On real recordings the photodiode
 is the timing ground truth by design.
 
 ## License
